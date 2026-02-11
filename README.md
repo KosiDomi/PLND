@@ -1,162 +1,247 @@
-# ArduPilot Project
+# ArduPilot Precision Landing with Yaw Alignment
 
-[![Discord](https://img.shields.io/discord/674039678562861068.svg)](https://ardupilot.org/discord)
+Custom ArduCopter firmware for AprilTag-based precision landing with automatic yaw alignment to the target.
 
-[![Test Copter](https://github.com/ArduPilot/ardupilot/workflows/test%20copter/badge.svg?branch=master)](https://github.com/ArduPilot/ardupilot/actions/workflows/test_sitl_copter.yml) [![Test Plane](https://github.com/ArduPilot/ardupilot/workflows/test%20plane/badge.svg?branch=master)](https://github.com/ArduPilot/ardupilot/actions/workflows/test_sitl_plane.yml) [![Test Rover](https://github.com/ArduPilot/ardupilot/workflows/test%20rover/badge.svg?branch=master)](https://github.com/ArduPilot/ardupilot/actions/workflows/test_sitl_rover.yml) [![Test Sub](https://github.com/ArduPilot/ardupilot/workflows/test%20sub/badge.svg?branch=master)](https://github.com/ArduPilot/ardupilot/actions/workflows/test_sitl_sub.yml) [![Test Tracker](https://github.com/ArduPilot/ardupilot/workflows/test%20tracker/badge.svg?branch=master)](https://github.com/ArduPilot/ardupilot/actions/workflows/test_sitl_tracker.yml)
+**Tested hardware:** Pixhawk 6X, OpenMV Cam RT1062 (OV5640), rangefinder (LiDAR).
 
-[![Test AP_Periph](https://github.com/ArduPilot/ardupilot/workflows/test%20ap_periph/badge.svg?branch=master)](https://github.com/ArduPilot/ardupilot/actions/workflows/test_sitl_periph.yml) [![Test Chibios](https://github.com/ArduPilot/ardupilot/workflows/test%20chibios/badge.svg?branch=master)](https://github.com/ArduPilot/ardupilot/actions/workflows/test_chibios.yml) [![Test Linux SBC](https://github.com/ArduPilot/ardupilot/workflows/test%20Linux%20SBC/badge.svg?branch=master)](https://github.com/ArduPilot/ardupilot/actions/workflows/test_linux_sbc.yml) [![Test Replay](https://github.com/ArduPilot/ardupilot/workflows/test%20replay/badge.svg?branch=master)](https://github.com/ArduPilot/ardupilot/actions/workflows/test_replay.yml)
+---
 
-[![Test Unit Tests](https://github.com/ArduPilot/ardupilot/workflows/test%20unit%20tests%20and%20sitl%20building/badge.svg?branch=master)](https://github.com/ArduPilot/ardupilot/actions/workflows/test_unit_tests.yml)[![test size](https://github.com/ArduPilot/ardupilot/actions/workflows/test_size.yml/badge.svg)](https://github.com/ArduPilot/ardupilot/actions/workflows/test_size.yml)
+## Overview
 
-[![Test Environment Setup](https://github.com/ArduPilot/ardupilot/actions/workflows/test_environment.yml/badge.svg?branch=master)](https://github.com/ArduPilot/ardupilot/actions/workflows/test_environment.yml)
+The system lets the drone:
 
-[![Cygwin Build](https://github.com/ArduPilot/ardupilot/actions/workflows/cygwin_build.yml/badge.svg)](https://github.com/ArduPilot/ardupilot/actions/workflows/cygwin_build.yml) [![Macos Build](https://github.com/ArduPilot/ardupilot/actions/workflows/macos_build.yml/badge.svg)](https://github.com/ArduPilot/ardupilot/actions/workflows/macos_build.yml)
+1. Detect an AprilTag and receive position + orientation via MAVLink
+2. Center over the target (XY), then align heading (yaw) to the tag
+3. Descend with combined XY and yaw control and land precisely
 
-[![Coverity Scan Build Status](https://scan.coverity.com/projects/5331/badge.svg)](https://scan.coverity.com/projects/ardupilot-ardupilot)
+**Main components:**
 
-[![Test Coverage](https://github.com/ArduPilot/ardupilot/actions/workflows/test_coverage.yml/badge.svg?branch=master)](https://github.com/ArduPilot/ardupilot/actions/workflows/test_coverage.yml)
+- **OpenMV script** — AprilTag detection, pose (yaw quaternion), `LANDING_TARGET` MAVLink messages
+- **ArduCopter changes** — extended `AC_PrecLand` with a yaw alignment state machine, descent logic, and `PL2` logging
 
-[![Autotest Status](https://autotest.ardupilot.org/autotest-badge.svg)](https://autotest.ardupilot.org/)
+---
 
-[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/10598/badge)](https://www.bestpractices.dev/projects/10598)
+## Architecture
 
-ArduPilot is the most advanced, full-featured, and reliable open source autopilot software available.
-It has been under development since 2010 by a diverse team of professional engineers, computer scientists, and community contributors.
-Our autopilot software is capable of controlling almost any vehicle system imaginable, from conventional airplanes, quad planes, multi-rotors, and helicopters to rovers, boats, balance bots, and even submarines.
-It is continually being expanded to provide support for new emerging vehicle types.
+```
+OpenMV (AprilTag + Yaw)     UART/MAVLink      Pixhawk (ArduCopter)
+┌─────────────────────┐  LANDING_TARGET   ┌──────────────────────────┐
+│ mavlink_apriltags_   │ ──────────────────│ AC_PrecLand_MAVLink       │
+│ landing_target.py     │  angle_x/y,       │   → AC_PrecLand (EKF)     │
+│ (quaternion, time)   │  quaternion       │   → Yaw align state machine│
+└─────────────────────┘                   │   → mode.cpp (descent/XY)  │
+                                           │   → AutoYaw PRECLAND_TARGET│
+     Rangefinder ─────────────────────────│   (altitude)              │
+                                           └──────────────────────────┘
+```
 
-## The ArduPilot project is made up of
+---
 
-- ArduCopter: [code](https://github.com/ArduPilot/ardupilot/tree/master/ArduCopter), [wiki](https://ardupilot.org/copter/index.html)
+## Features
 
-- ArduPlane: [code](https://github.com/ArduPilot/ardupilot/tree/master/ArduPlane), [wiki](https://ardupilot.org/plane/index.html)
+- **Yaw alignment state machine** — SEARCHING → XY_CENTERING → COARSE_ALIGNING → DESCENDING → FINE_ALIGNING → FINAL_DESCENT
+- **XY-first centering** — Center over tag before rotating to avoid losing the target
+- **Configurable tolerances** — Coarse and fine yaw phases with separate time and altitude gates
+- **Position hold during yaw** — During coarse/fine align, position held via EKF when target is lost
+- **Optional yaw** — Set `PLND_YAW_TGT = -1` for position-only precision landing (no yaw alignment)
 
-- Rover: [code](https://github.com/ArduPilot/ardupilot/tree/master/Rover), [wiki](https://ardupilot.org/rover/index.html)
+---
 
-- ArduSub : [code](https://github.com/ArduPilot/ardupilot/tree/master/ArduSub), [wiki](http://ardusub.com/)
+## State Machine
 
-- Antenna Tracker : [code](https://github.com/ArduPilot/ardupilot/tree/master/AntennaTracker), [wiki](https://ardupilot.org/antennatracker/index.html)
+```
+┌─────────────┐
+│  SEARCHING  │  Descent allowed, no target yet
+└──────┬──────┘
+       │ Target visible
+       ▼
+┌───────────────┐
+│ XY_CENTERING  │  Center over tag, slow descent, no yaw yet (≈1s stable)
+└───────┬───────┘
+        │ XY error < PLND_ACC_ERR for PLND_YAW_STABLE
+        ▼
+┌─────────────────┐
+│ COARSE_ALIGNING │  Rotate to tag yaw, descent PAUSED, position hold
+└────────┬────────┘
+         │ Yaw within PLND_YAW_COARSE for PLND_YAW_TIME
+         ▼
+┌────────────────┐
+│ COARSE_HOLDING │  Short transition
+└────────┬───────┘
+         ▼
+┌─────────────┐
+│ DESCENDING  │  Descent with XY + yaw correction
+└──────┬──────┘
+       │ Altitude < PLND_YAW_FALT
+       ▼
+┌───────────────┐
+│ FINE_ALIGNING │  Fine yaw trim, descent PAUSED (timeout 20s)
+└───────┬───────┘
+        │ Yaw within PLND_YAW_FINE for PLND_YAW_TIME
+        ▼
+┌──────────────┐
+│ FINAL_DESCENT│  Land with yaw locked
+└──────────────┘
+```
 
-## User Support & Discussion Forums
+---
 
-- Support Forum: <https://discuss.ardupilot.org/>
+## Installation
 
-- Community Site: <https://ardupilot.org>
+### Files to Copy Into Your ArduPilot Tree
 
-## Developer Information
+Replace the same paths in your clone with these (from your precision-landing branch or repo):
 
-- Github repository: <https://github.com/ArduPilot/ardupilot>
+**ArduCopter**
 
-- Main developer wiki: <https://ardupilot.org/dev/>
+- `ArduCopter/mode.cpp`
+- `ArduCopter/mode.h`
+- `ArduCopter/autoyaw.cpp`
+- `ArduCopter/mode_land.cpp`
+- `ArduCopter/mode_rtl.cpp`
+- `ArduCopter/mode_auto.cpp`
 
-- Developer discussion: <https://discuss.ardupilot.org>
+**Libraries**
 
-- Developer chat: <https://discord.com/channels/ardupilot>
+- `libraries/AC_PrecLand/AC_PrecLand.cpp`
+- `libraries/AC_PrecLand/AC_PrecLand.h`
+- `libraries/AC_PrecLand/LogStructure.h`
 
-## Top Contributors
+**OpenMV (optional, for camera/sim)**
 
-- [Flight code contributors](https://github.com/ArduPilot/ardupilot/graphs/contributors)
-- [Wiki contributors](https://github.com/ArduPilot/ardupilot_wiki/graphs/contributors)
-- [Most active support forum users](https://discuss.ardupilot.org/u?order=post_count&period=quarterly)
-- [Partners who contribute financially](https://ardupilot.org/about/Partners)
+- `OpenMV Code/mavlink_apriltags_landing_target.py` — camera script
+- `OpenMV Code/apriltag_mavlink_sim.py` — Gazebo SITL sim
 
-## How To Get Involved
+### Build
 
-- The ArduPilot project is open source and we encourage participation and code contributions: [guidelines for contributors to the ardupilot codebase](https://ardupilot.org/dev/docs/contributing.html)
+```bash
+cd ardupilot
+./waf configure --board <your-board>   # e.g. sitl, Pixhawk6X-bdshot
+./waf copter
+```
 
-- We have an active group of Beta Testers to help us improve our code: [release procedures](https://ardupilot.org/dev/docs/release-procedures.html)
+---
 
-- Desired Enhancements and Bugs can be posted to the [issues list](https://github.com/ArduPilot/ardupilot/issues).
+## Parameters
 
-- Help other users with log analysis in the [support forums](https://discuss.ardupilot.org/)
+### Core
 
-- Improve the wiki and chat with other [wiki editors on Discord #documentation](https://discord.com/channels/ardupilot)
+| Parameter       | Default | Description                          |
+|----------------|---------|--------------------------------------|
+| `PLND_ENABLED` | 0       | 1 = precision landing enabled       |
+| `PLND_TYPE`    | 0       | 1 = MAVLink backend (OpenMV)         |
+| `PLND_YAW_TGT` | -1      | Target yaw offset (°), -1 = no yaw   |
 
-- Contact the developers on one of the [communication channels](https://ardupilot.org/copter/docs/common-contact-us.html)
+### Yaw Alignment
+
+| Parameter         | Default | Range   | Description                    |
+|------------------|---------|--------|--------------------------------|
+| `PLND_YAW_MAXALT`| 3.0     | 0–50 m | Max altitude to start yaw      |
+| `PLND_YAW_COARSE`| 1000    | 100–9000 | Coarse tolerance (centidegrees) |
+| `PLND_YAW_FINE`  | 300     | 50–1000 | Fine tolerance (centidegrees)  |
+| `PLND_YAW_FALT`  | 0.5     | 0–10 m | Altitude for fine phase        |
+| `PLND_YAW_TIME`  | 2.0     | 0.5–10 s | Hold time in tolerance       |
+| `PLND_YAW_RATE`  | 30      | 5–90 °/s | Max yaw rate                 |
+| `PLND_YAW_FILT`  | 0.3     | 0–0.9  | Yaw low-pass (0 = off)        |
+| `PLND_YAW_STABLE`| 0.5     | 0–5 s  | Required stable hover time    |
+
+### Position
+
+| Parameter        | Default | Description              |
+|-----------------|---------|--------------------------|
+| `PLND_ACC_ERR`  | 0.5     | Acceptable XY error (m)  |
+| `PLND_FINE_CORR`| 0.3     | Max fine-phase XY (m)    |
+| `PLND_TIMEOUT`  | 4.0     | Target-lost timeout (s)  |
+
+---
+
+## Recommended Presets
+
+**Small tags (&lt; 50 mm)**  
+`PLND_YAW_MAXALT=2.0` `PLND_YAW_COARSE=500` `PLND_YAW_FINE=200` `PLND_YAW_FALT=0.3` `PLND_ACC_ERR=0.3`
+
+**Medium tags (50–150 mm)**  
+`PLND_YAW_MAXALT=3.0` `PLND_YAW_COARSE=1000` `PLND_YAW_FINE=300` `PLND_YAW_FALT=0.5` `PLND_ACC_ERR=0.5`
+
+**Large tags (&gt; 150 mm)**  
+`PLND_YAW_MAXALT=5.0` `PLND_YAW_COARSE=1500` `PLND_YAW_FINE=500` `PLND_YAW_FALT=1.0` `PLND_ACC_ERR=0.8`
+
+---
+
+## OpenMV Camera Setup
+
+- **Hardware:** OpenMV Cam H7 Plus or RT1062, UART to autopilot.
+- **Script:** Flash `mavlink_apriltags_landing_target.py` to the OpenMV; set tag ID/size and serial port in the script.
+- **ArduPilot:**  
+  `SERIALx_PROTOCOL = 1` (MAVLink), `SERIALx_BAUD = 115200`, `PLND_ENABLED = 1`, `PLND_TYPE = 1`.
+
+More detail: see `OpenMV Code/README_Precision_Landing.md`.
+
+---
+
+## Simulation (Gazebo)
+
+```bash
+pip install apriltag pupil-apriltags pymavlink opencv-python numpy
+```
+
+**Terminal 1:** `sim_vehicle.py -v ArduCopter --gazebo`  
+**Terminal 2:** `python OpenMV\ Code/apriltag_mavlink_sim.py --tag-size 800 --decimate 2.0`  
+**Terminal 3 (MAVProxy):** `mode GUIDED` → `arm throttle` → `takeoff 5` → `mode LAND`
+
+Options: `--port`, `--sitl-port`, `--tag-size`, `--decimate`, `--invert-yaw`, `--yaw-offset`.
+
+---
+
+## Quick Test
+
+1. GUIDED, arm, takeoff (e.g. 5 m).
+2. Move drone off-center from tag.
+3. `mode LAND` — expect: XY centering → yaw alignment → descent → fine align → final descent.
+
+**Typical GCS messages:**  
+`PrecLand: Yaw align active, searching` → `Target found, centering XY` → `XY stable` → `Coarse alignment complete!` → `Descending with yaw control` → `Fine align at …` → `Fine alignment complete!` → `Final descent with yaw locked`.
+
+---
+
+## Troubleshooting
+
+| Symptom              | Likely cause           | Action                    |
+|----------------------|------------------------|---------------------------|
+| No yaw alignment     | `PLND_YAW_TGT = -1`    | Set 0–360                 |
+| Loses target in turn | Tag too small          | Lower `PLND_YAW_MAXALT`   |
+| Yaw oscillation      | Filter too low         | Increase `PLND_YAW_FILT`  |
+| XY center timeout    | Wind / accuracy        | Increase `PLND_ACC_ERR`   |
+| Fine align timeout   | Tolerance too tight    | Increase `PLND_YAW_FINE`  |
+
+---
+
+## Files Overview
+
+| Path / file | Role |
+|-------------|------|
+| `libraries/AC_PrecLand/AC_PrecLand.cpp` | State machine, EKF, PL2 log, parameters |
+| `libraries/AC_PrecLand/AC_PrecLand.h`   | State enums, parameter declarations, API |
+| `libraries/AC_PrecLand/LogStructure.h`  | `PL2` log message for yaw diagnostics   |
+| `ArduCopter/mode.cpp`                   | Descent/XY and precision landing logic  |
+| `ArduCopter/mode.h`                     | Precision landing state, `precland_reset_state()`, AutoYaw mode |
+| `ArduCopter/autoyaw.cpp`                | Yaw rate control for `PRECLAND_TARGET`  |
+| `ArduCopter/mode_land.cpp`              | LAND init: `yaw_align_init()`, `precland_reset_state()` |
+| `ArduCopter/mode_rtl.cpp`               | RTL init: same resets                   |
+| `ArduCopter/mode_auto.cpp`              | Auto init: same resets                  |
+| `OpenMV Code/mavlink_apriltags_landing_target.py` | OpenMV AprilTag + MAVLink script |
+| `OpenMV Code/apriltag_mavlink_sim.py`   | Gazebo SITL AprilTag injector           |
+
+---
+
+## More Detail
+
+- **Camera, parameters, logging:** `OpenMV Code/README_Precision_Landing.md`
+- **Log analysis:** `OpenMV Code/Precision_Landing_Log_Debugging_Guide.txt` (if present)
+- **Gazebo workflow:** `OpenMV Code/How To Gazebo.txt` (if present)
+
+---
 
 ## License
 
-The ArduPilot project is licensed under the GNU General Public
-License, version 3.
-
-- [Overview of license](https://ardupilot.org/dev/docs/license-gplv3.html)
-
-- [Full Text](https://github.com/ArduPilot/ardupilot/blob/master/COPYING.txt)
-
-## Maintainers
-
-ArduPilot is comprised of several parts, vehicles and boards. The list below
-contains the people that regularly contribute to the project and are responsible
-for reviewing patches on their specific area.
-
-- [Andrew Tridgell](https://github.com/tridge):
-  - ***Vehicle***: Plane, AntennaTracker
-  - ***Board***: Pixhawk, Pixhawk2, PixRacer
-- [Francisco Ferreira](https://github.com/oxinarf):
-  - ***Bug Master***
-- [Grant Morphett](https://github.com/gmorph):
-  - ***Vehicle***: Rover
-- [Willian Galvani](https://github.com/williangalvani):
-  - ***Vehicle***: Sub
-  - ***Board***: Navigator
-- [Michael du Breuil](https://github.com/WickedShell):
-  - ***Subsystem***: Batteries
-  - ***Subsystem***: GPS
-  - ***Subsystem***: Scripting
-- [Peter Barker](https://github.com/peterbarker):
-  - ***Subsystem***: DataFlash, Tools
-- [Randy Mackay](https://github.com/rmackay9):
-  - ***Vehicle***: Copter, Rover, AntennaTracker
-- [Siddharth Purohit](https://github.com/bugobliterator):
-  - ***Subsystem***: CAN, Compass
-  - ***Board***: Cube*
-- [Tom Pittenger](https://github.com/magicrub):
-  - ***Vehicle***: Plane
-- [Bill Geyer](https://github.com/bnsgeyer):
-  - ***Vehicle***: TradHeli
-- [Emile Castelnuovo](https://github.com/emilecastelnuovo):
-  - ***Board***: VRBrain
-- [Georgii Staroselskii](https://github.com/staroselskii):
-  - ***Board***: NavIO
-- [Gustavo José de Sousa](https://github.com/guludo):
-  - ***Subsystem***: Build system
-- [Julien Beraud](https://github.com/jberaud):
-  - ***Board***: Bebop & Bebop 2
-- [Leonard Hall](https://github.com/lthall):
-  - ***Subsystem***: Copter attitude control and navigation
-- [Matt Lawrence](https://github.com/Pedals2Paddles):
-  - ***Vehicle***: 3DR Solo & Solo based vehicles
-- [Matthias Badaire](https://github.com/badzz):
-  - ***Subsystem***: FRSky
-- [Mirko Denecke](https://github.com/mirkix):
-  - ***Board***: BBBmini, BeagleBone Blue, PocketPilot
-- [Paul Riseborough](https://github.com/priseborough):
-  - ***Subsystem***: AP_NavEKF2
-  - ***Subsystem***: AP_NavEKF3
-- [Víctor Mayoral Vilches](https://github.com/vmayoral):
-  - ***Board***: PXF, Erle-Brain 2, PXFmini
-- [Amilcar Lucas](https://github.com/amilcarlucas):
-  - ***Subsystem***: Marvelmind
-- [Samuel Tabor](https://github.com/samuelctabor):
-  - ***Subsystem***: Soaring/Gliding
-- [Henry Wurzburg](https://github.com/Hwurzburg):
-  - ***Subsystem***: OSD
-  - ***Site***: Wiki
-- [Peter Hall](https://github.com/IamPete1):
-  - ***Vehicle***: Tailsitters
-  - ***Vehicle***: Sailboat
-  - ***Subsystem***: Scripting
-- [Andy Piper](https://github.com/andyp1per):
-  - ***Subsystem***: Crossfire
-  - ***Subsystem***: ESC
-  - ***Subsystem***: OSD
-  - ***Subsystem***: SmartAudio
-- [Alessandro Apostoli](https://github.com/yaapu):
-  - ***Subsystem***: Telemetry
-  - ***Subsystem***: OSD
-- [Rishabh Singh](https://github.com/rishabsingh3003):
-  - ***Subsystem***: Avoidance/Proximity
-- [David Bussenschutt](https://github.com/davidbuzz):
-  - ***Subsystem***: ESP32,AP_HAL_ESP32
-- [Charles Villard](https://github.com/Silvanosky):
-  - ***Subsystem***: ESP32,AP_HAL_ESP32
+This modification follows the ArduPilot project license (GPLv3).
