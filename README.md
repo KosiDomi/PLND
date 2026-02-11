@@ -86,32 +86,6 @@ OpenMV (AprilTag + Yaw)     UART/MAVLink      Pixhawk (ArduCopter)
 
 ---
 
-## Installation
-
-### Files to Copy Into Your ArduPilot Tree
-
-Replace the same paths in your clone with these (from your precision-landing branch or repo):
-
-**ArduCopter**
-
-- `ArduCopter/mode.cpp`
-- `ArduCopter/mode.h`
-- `ArduCopter/autoyaw.cpp`
-- `ArduCopter/mode_land.cpp`
-- `ArduCopter/mode_rtl.cpp`
-- `ArduCopter/mode_auto.cpp`
-
-**Libraries**
-
-- `libraries/AC_PrecLand/AC_PrecLand.cpp`
-- `libraries/AC_PrecLand/AC_PrecLand.h`
-- `libraries/AC_PrecLand/LogStructure.h`
-
-**OpenMV (optional, for camera/sim)**
-
-- `OpenMV Code/mavlink_apriltags_landing_target.py` — camera script
-- `OpenMV Code/apriltag_mavlink_sim.py` — Gazebo SITL sim
-
 ### Build
 
 ```bash
@@ -155,19 +129,6 @@ cd ardupilot
 
 ---
 
-## Recommended Presets
-
-**Small tags (&lt; 50 mm)**  
-`PLND_YAW_MAXALT=2.0` `PLND_YAW_COARSE=500` `PLND_YAW_FINE=200` `PLND_YAW_FALT=0.3` `PLND_ACC_ERR=0.3`
-
-**Medium tags (50–150 mm)**  
-`PLND_YAW_MAXALT=3.0` `PLND_YAW_COARSE=1000` `PLND_YAW_FINE=300` `PLND_YAW_FALT=0.5` `PLND_ACC_ERR=0.5`
-
-**Large tags (&gt; 150 mm)**  
-`PLND_YAW_MAXALT=5.0` `PLND_YAW_COARSE=1500` `PLND_YAW_FINE=500` `PLND_YAW_FALT=1.0` `PLND_ACC_ERR=0.8`
-
----
-
 ## OpenMV Camera Setup
 
 - **Hardware:** OpenMV Cam H7 Plus or RT1062, UART to autopilot.
@@ -176,31 +137,6 @@ cd ardupilot
   `SERIALx_PROTOCOL = 1` (MAVLink), `SERIALx_BAUD = 115200`, `PLND_ENABLED = 1`, `PLND_TYPE = 1`.
 
 More detail: see `OpenMV Code/README_Precision_Landing.md`.
-
----
-
-## Simulation (Gazebo)
-
-```bash
-pip install apriltag pupil-apriltags pymavlink opencv-python numpy
-```
-
-**Terminal 1:** `sim_vehicle.py -v ArduCopter --gazebo`  
-**Terminal 2:** `python OpenMV\ Code/apriltag_mavlink_sim.py --tag-size 800 --decimate 2.0`  
-**Terminal 3 (MAVProxy):** `mode GUIDED` → `arm throttle` → `takeoff 5` → `mode LAND`
-
-Options: `--port`, `--sitl-port`, `--tag-size`, `--decimate`, `--invert-yaw`, `--yaw-offset`.
-
----
-
-## Quick Test
-
-1. GUIDED, arm, takeoff (e.g. 5 m).
-2. Move drone off-center from tag.
-3. `mode LAND` — expect: XY centering → yaw alignment → descent → fine align → final descent.
-
-**Typical GCS messages:**  
-`PrecLand: Yaw align active, searching` → `Target found, centering XY` → `XY stable` → `Coarse alignment complete!` → `Descending with yaw control` → `Fine align at …` → `Fine alignment complete!` → `Final descent with yaw locked`.
 
 ---
 
