@@ -234,14 +234,6 @@ Options: `--port`, `--sitl-port`, `--tag-size`, `--decimate`, `--invert-yaw`, `-
 
 ---
 
-## More Detail
-
-- **Camera, parameters, logging:** `OpenMV Code/README_Precision_Landing.md`
-- **Log analysis:** `OpenMV Code/Precision_Landing_Log_Debugging_Guide.txt` (if present)
-- **Gazebo workflow:** `OpenMV Code/How To Gazebo.txt` (if present)
-
----
-
 ## License
 
 This modification follows the ArduPilot project license (GPLv3).
