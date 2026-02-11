@@ -107,6 +107,19 @@ void Mode::AutoYaw::set_mode(Mode yaw_mode)
     case Mode::WEATHERVANE:
         // no initialisation required
         break;
+
+    case Mode::PRECLAND_TARGET:
+        // =======================================================================
+        // Initialize _yaw_angle_rad to current vehicle yaw
+        // AND set _precland_target_yaw_rad to current yaw as well.
+        // This prevents an immediate rotation when entering this mode.
+        // =======================================================================
+        _yaw_angle_rad = copter.ahrs.get_yaw_rad();
+        _precland_target_yaw_rad = _yaw_angle_rad;
+        _precland_target_yaw_valid = false;  
+        _last_update_ms = millis();
+        _yaw_rate_rads = 0.0f;
+        break;
     }
 }
 
@@ -229,7 +242,6 @@ bool Mode::AutoYaw::reached_fixed_yaw_target()
     return (fabsf(wrap_PI(_yaw_angle_rad - copter.ahrs.get_yaw_rad())) <= radians(2));
 }
 
-// yaw_rad - returns target heading depending upon auto_yaw.mode()
 float Mode::AutoYaw::yaw_rad()
 {
     switch (_mode) {
@@ -283,13 +295,69 @@ float Mode::AutoYaw::yaw_rad()
         _yaw_angle_rad = copter.attitude_control->get_att_target_euler_rad().z;
         break;
 
+    case Mode::PRECLAND_TARGET:
+        if (_precland_target_yaw_valid) {
+            const uint32_t now_ms = millis();
+            float dt = (now_ms - _last_update_ms) * 0.001f;
+            _last_update_ms = now_ms;
+            
+            // Sanitize dt (min 1ms, max 100ms)
+            dt = constrain_float(dt, 0.001f, 0.1f);
+            
+            // Get max yaw rate from parameter
+            float max_yaw_rate_rads;
+#if AC_PRECLAND_ENABLED
+            max_yaw_rate_rads = radians(copter.precland.get_yaw_rate_max_dps());
+#else
+            max_yaw_rate_rads = radians(30.0f);  // Default: 30 deg/s
+#endif
+            
+            // =================================================================
+            // CORRECTED RATE-LIMITING:
+            // 
+            // Previous bug:
+            //   yaw_error = target - current_vehicle_yaw
+            //   _yaw_angle_rad = current_vehicle_yaw + limited_step
+            //   → The target "jumps with" the vehicle!
+            //
+            // Fixed approach:
+            //   target_error = new_target - current_target (_yaw_angle_rad)
+            //   _yaw_angle_rad = current_target + limited_step
+            //   → The target moves SLOWLY towards the goal
+            // =================================================================
+            
+            // Compute error between CURRENT internal target and NEW external target
+            float target_error = wrap_PI(_precland_target_yaw_rad - _yaw_angle_rad);
+            
+            // Rate-limit: maximum step per time unit
+            float max_yaw_step = max_yaw_rate_rads * dt;
+            
+            // Limit the step
+            float yaw_step = constrain_float(target_error, -max_yaw_step, max_yaw_step);
+            
+            // Update the internal target (rate-limited)
+            _yaw_angle_rad = wrap_PI(_yaw_angle_rad + yaw_step);
+            
+            // Compute the actual yaw rate for the controller
+            // (returned by rate_rads())
+            _yaw_rate_rads = yaw_step / dt;
+            
+        } else {
+            // No valid external target - hold current heading
+            // Set internal target to current vehicle heading
+            _yaw_angle_rad = copter.ahrs.get_yaw_rad();
+            _yaw_rate_rads = 0.0f;
+        }
+        break;
+
     case Mode::LOOK_AT_NEXT_WP:
     default:
         // point towards next waypoint.
         // we don't use wp_bearing_deg because we don't want the copter to turn too much during flight
         _yaw_angle_rad = copter.pos_control->get_yaw_rad();
-    break;
+        break;
     }
+    
     return _yaw_angle_rad;
 }
 
@@ -305,7 +373,11 @@ float Mode::AutoYaw::rate_rads()
     case Mode::LOOK_AHEAD:
     case Mode::RESET_TO_ARMED_YAW:
     case Mode::CIRCLE:
-        _yaw_rate_rads = 0.0f;
+        break;
+
+    case Mode::PRECLAND_TARGET:
+        // Rate is already calculated in yaw_rad(), just return it
+        // DO NOT recalculate - that causes double control loop issues
         break;
 
     case Mode::LOOK_AT_NEXT_WP:
@@ -363,6 +435,7 @@ AC_AttitudeControl::HeadingCommand Mode::AutoYaw::get_heading()
         case Mode::RESET_TO_ARMED_YAW:
         case Mode::ANGLE_RATE:
         case Mode::CIRCLE:
+        case Mode::PRECLAND_TARGET:
             heading.heading_mode = AC_AttitudeControl::HeadingMode::Angle_And_Rate;
             break;
     }

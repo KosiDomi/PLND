@@ -1,0 +1,67 @@
+Terminal 1:
+
+cd ardupilot/gz_ws/src/ardupilot_gazebo/worlds
+
+export GZ_SIM_SYSTEM_PLUGIN_PATH=$HOME/ardupilot/gz_ws/src/ardupilot_gazebo/build:$GZ_SIM_SYSTEM_PLUGIN_PATH
+
+export GZ_SIM_RESOURCE_PATH=$HOME/ardupilot/gz_ws/src/ardupilot_gazebo/models:$HOME/ardupilot/gz_ws/src/ardupilot_gazebo/worlds:$GZ_SIM_RESOURCE_PATH
+
+export GZ_SIM_RESOURCE_PATH=$HOME/gazebo_apriltag/models:$GZ_SIM_RESOURCE_PATH
+
+gz sim -v4 -r iris_runway.sdf
+
+
+Terminal 2:
+
+cd ardupilot/gz_ws/src/ardupilot_gazebo/worlds
+
+sim_vehicle.py -v ArduCopter -f gazebo-iris --model JSON --map --console
+
+param set SIM_WIND_SPD 8
+
+param set SIM_WIND_DIR 270
+
+param set SIM_WIND_TURB 1.0
+
+param set SIM_WIND_T 0 
+  
+param set SIM_WIND_T_ALT 20
+
+param set SIM_WIND_TC 3 
+
+param set SIM_WIND_DIR_Z 5
+
+param set SIM_GPS1_NOISE 1.0
+
+param set SIM_GPS1_ACC 1.5
+
+param set SIM_GPS1_NUMSATS 8
+
+param set SIM_ACC1_RND 0.2
+
+param set SIM_GYR1_RND 0.005
+
+param set SIM_VIB_MOT_MAX 1.0
+
+param set SIM_VIB_FREQ 100
+
+param set SIM_MAG_RND 2
+
+param set SIM_MAG_MOT 0.2
+
+param set SIM_SONAR_RND 0.05
+
+servo set 10 1300
+
+param set PLND_YAW_MAXALT 1
+
+
+Terminal 3: 
+
+gz topic -t /world/iris_runway/model/iris_with_gimbal/model/gimbal/link/pitch_link/sensor/camera/image/enable_streaming -m gz.msgs.Boolean -p "data: 1"
+
+cd openmv_sim
+
+python3 apriltag_mavlink_sim.py "$@"
+
+
